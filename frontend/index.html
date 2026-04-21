@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OWASP LLM Lab</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    header h1 { font-size: 1.25rem; font-weight: 700; }
+    header .badge {
+      font-size: 0.7rem;
+      background: #ef4444;
+      color: white;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    #provider-tag {
+      margin-left: auto;
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      max-width: 860px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 2rem 1rem;
+      gap: 1rem;
+    }
+
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      min-height: 300px;
+    }
+
+    .msg {
+      padding: 0.75rem 1rem;
+      border-radius: 0.5rem;
+      max-width: 85%;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .msg.user {
+      background: #1d4ed8;
+      align-self: flex-end;
+    }
+
+    .msg.assistant {
+      background: #1e293b;
+      border: 1px solid #334155;
+      align-self: flex-start;
+    }
+
+    .msg.error {
+      background: #7f1d1d;
+      border: 1px solid #ef4444;
+      align-self: center;
+      color: #fca5a5;
+      font-size: 0.875rem;
+    }
+
+    form {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    textarea {
+      flex: 1;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      font-size: 0.95rem;
+      resize: none;
+      min-height: 60px;
+      max-height: 200px;
+    }
+
+    textarea:focus { outline: none; border-color: #3b82f6; }
+
+    button[type=submit] {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 0.5rem;
+      padding: 0.75rem 1.5rem;
+      font-size: 0.95rem;
+      cursor: pointer;
+      align-self: flex-end;
+      transition: background 0.15s;
+    }
+
+    button[type=submit]:hover { background: #2563eb; }
+    button[type=submit]:disabled { background: #475569; cursor: not-allowed; }
+
+    .system-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .system-row label { font-size: 0.8rem; color: #94a3b8; white-space: nowrap; }
+
+    #system-prompt {
+      flex: 1;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      border-radius: 0.5rem;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+    }
+
+    #system-prompt:focus { outline: none; border-color: #6366f1; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>OWASP LLM Lab</h1>
+    <span class="badge">SECURITY TESTING</span>
+    <span id="provider-tag">loading…</span>
+  </header>
+
+  <main>
+    <div class="system-row">
+      <label for="system-prompt">System prompt</label>
+      <input id="system-prompt" type="text" placeholder="(optional) You are a helpful assistant…" />
+    </div>
+
+    <div id="messages"></div>
+
+    <form id="chat-form">
+      <textarea id="user-input" placeholder="Type your prompt and press Enter (Shift+Enter for newline)…" rows="2"></textarea>
+      <button type="submit" id="send-btn">Send</button>
+    </form>
+  </main>
+
+  <script>
+    const API = '/api';
+    const messagesEl = document.getElementById('messages');
+    const form = document.getElementById('chat-form');
+    const input = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const systemInput = document.getElementById('system-prompt');
+    const providerTag = document.getElementById('provider-tag');
+
+    // Load runtime config
+    fetch(`${API}/config`)
+      .then(r => r.json())
+      .then(cfg => { providerTag.textContent = `${cfg.provider} / ${cfg.model}`; })
+      .catch(() => { providerTag.textContent = 'backend offline'; });
+
+    function addMessage(role, text) {
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    async function sendMessage() {
+      const prompt = input.value.trim();
+      if (!prompt) return;
+
+      addMessage('user', prompt);
+      input.value = '';
+      sendBtn.disabled = true;
+
+      const thinking = addMessage('assistant', '…');
+
+      try {
+        const body = { message: prompt };
+        const sys = systemInput.value.trim();
+        if (sys) body.system = sys;
+
+        const resp = await fetch(`${API}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          thinking.className = 'msg error';
+          thinking.textContent = `Error ${resp.status}: ${data.detail ?? 'unknown error'}`;
+        } else {
+          thinking.textContent = data.content;
+        }
+      } catch (err) {
+        thinking.className = 'msg error';
+        thinking.textContent = `Network error: ${err.message}`;
+      } finally {
+        sendBtn.disabled = false;
+        input.focus();
+      }
+    }
+
+    form.addEventListener('submit', e => { e.preventDefault(); sendMessage(); });
+
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+  </script>
+</body>
+</html>
